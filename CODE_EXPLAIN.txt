@@ -1,0 +1,108 @@
+Breakdown Helper — Code Explanation
+
+Purpose
+-------
+This document explains the project's code at a higher level and also dives into specifics: what each import is used for, key files and their responsibilities, common code patterns, and the rationale behind design decisions. Use this as a guide while reviewing or defending the code.
+
+Global imports — what they bring and why
+---------------------------------------
+- `package:flutter/material.dart` —
+  Provides core Flutter widgets (Scaffold, AppBar, Text, Buttons), themes, and common UI primitives.
+  Used in every UI file.
+
+- `package:provider/provider.dart` —
+  Simple state management. Used for `SessionState` to expose authentication state and methods to the widget tree (login, logout, signUp, etc.).
+
+- `package:geolocator/geolocator.dart` —
+  Platform geolocation library. Wrapped by `LocationService` to fetch device coordinates safely and handle permissions.
+
+- `package:uuid/uuid.dart` —
+  Generates unique request IDs for `BreakdownRequest`. Useful for offline/demo mode where an ID is needed before server assignment.
+
+- `package:supabase_flutter/supabase_flutter.dart` (or `supabase_flutter`) —
+  Used by `AuthService` and `BreakdownService` for authentication and persistence when connected to a Supabase backend.
+
+- `package:rive/rive.dart` —
+  Provides vector animations (Rive) for header visuals. Note: Rive exports some names (`LinearGradient`, `Image`) that can conflict with Flutter exports; we hide conflicting symbols using `import 'package:rive/rive.dart' hide LinearGradient, Image;` to ensure Flutter's `LinearGradient` and `Image` are used.
+
+- `package:url_launcher/url_launcher.dart` —
+  Opens the OS dialer with a `tel:` URI to make phone calls from the helper card.
+
+- `package:uuid/uuid.dart` —
+  Provides UUIDs for locally created objects.
+
+Project structure and responsibilities
+-------------------------------------
+- `lib/main.dart` —
+  App entrypoint. Sets up `MaterialApp`, route table, theming, and wires `Provider` for `SessionState`.
+
+- `lib/models/` —
+  `breakdown_request.dart` defines `BreakdownRequest` (id, userId, type, description, latitude, longitude, createdAt) used across screens and services.
+
+- `lib/state/session_state.dart` —
+  Holds the logged-in user, exposes `login`, `logout`, `signUp`, `loginAsGuest`, and `resendConfirmationEmail`. It uses `AuthService` under the hood and notifies listeners on changes.
+
+- `lib/services/` —
+  * `auth_service.dart` — speaks to Supabase for authentication.
+  * `breakdown_service.dart` — persist breakdowns (calls to a REST/DB endpoint); has handling for missing DB/table (detects error patterns and falls back to local flow).
+  * `drivers_service.dart` — returns a list of driver records (demo or via API). The demo implementation may return static or generated data. This isolates backend changes.
+  * `location_service.dart` — wraps `geolocator` permission handling and current position fetching.
+
+- `lib/ui/` — grouped by feature:
+  * `splash/splash_screen.dart` — splash with Rive animation and hero logo.
+  * `auth/login_screen.dart`, `auth/signup_screen.dart` — auth flows; both use the `Hero` widget with tag `app-logo` for consistent cross-screen transitions.
+  * `breakdown/breakdown_form_screen.dart` — main form: fetches location on init, validates input, creates `BreakdownRequest`, calls `BreakdownService`, and navigates to `/nearby`.
+  * `nearby/nearby_helpers_screen.dart` — receives the `BreakdownRequest`, calls `DriversService.getNearbyDrivers()`, computes distances (Haversine formula) and ETA, and renders driver cards with phone call actions.
+
+Common code patterns & idioms
+----------------------------
+- Stateful widgets for screens that need lifecycle hooks and async operations (e.g., `_fetchLocation()` in the breakdown form). Use `initState()` and `dispose()` for setup and teardown.
+
+- Provider for global session state: `context.read<SessionState>()` or `context.watch<SessionState>()`.
+
+- Validation and forms: `GlobalKey<FormState>` and `TextFormField` with `validator:` used in `breakdown_form_screen.dart`.
+
+- Navigation: `Navigator.of(context).pushNamed('/nearby', arguments: request);` — arguments are used to pass data between screens (the `BreakdownRequest` instance).
+
+- Async safety: For long-running async methods, code should check `if (!mounted) return;` after `await` to avoid using a disposed `BuildContext`. Some files have analyzer warnings for missing `mounted` checks; these should be addressed by either capturing a Navigator reference before `await` or checking `mounted`.
+
+- Conflict avoidance: Rive and Flutter export overlapping symbols (e.g., `LinearGradient`, `Image`). Use `hide` to prevent ambiguous imports or import Rive with a prefix: `import 'package:rive/rive.dart' as rive;` and use `rive.RiveAnimation.network(...)`.
+
+Key helper implementations
+--------------------------
+- Distance calculation: Haversine formula implemented as `_distanceKm(lat1, lon1, lat2, lon2)` in `nearby_helpers_screen.dart`.
+- ETA estimation: `estimateResponseTime(distanceKm)` is a small helper that converts kilometers to minutes given an assumed speed (e.g., 40 km/h) — good for demo.
+- Demo data: `DriversService` produces driver records and deterministic but pseudo-random driver attributes (rating, services completed) by seeding `Random` with driver id hash; this yields consistent demo values per driver.
+
+Error handling and fallback
+---------------------------
+- `BreakdownService.createBreakdown()` is wrapped with a try/catch. If the backend responds with a known 'missing table' pattern (checked by message contents), the code constructs a local `BreakdownRequest` and navigates to the next screen with a SnackBar informing the user that server saving was skipped. This design keeps the demo flow resilient.
+
+Styling and animations
+----------------------
+- Rive provides animated backgrounds; hero transitions provide a polished feel when moving between splash, login, and breakdown screens.
+- ElevatedButtons use `style: ElevatedButton.styleFrom(...)` to unify appearance.
+- Animated widgets (AnimatedSwitcher, AnimatedOpacity, TweenAnimationBuilder) are used for smooth UI transitions and feedback.
+
+Assets and resources
+--------------------
+- `pubspec.yaml` contains an `assets:` entry for `assets/images/`. The app expects `assets/images/logo.png` for hero images. Place the real image there and run `flutter pub get`.
+
+Testing, quality and linting
+---------------------------
+- `flutter analyze` is used regularly. The analyzer currently reports informational deprecations (e.g., `.withOpacity()` flagged; the recommended API varies by Flutter version — check your local SDK docs).
+- Use `flutter test` to run unit/widget tests. There is a minimal `test/widget_test.dart` to expand.
+
+How to make common changes
+--------------------------
+- Replace demo DriversService with a real API: implement an HTTP client in `drivers_service.dart` that fetches drivers from your backend and returns the same model used by the UI.
+- Rename `BreakdownRequest` or extend it: changes are trivial as long as the serialization contract (fields) remains consistent between frontend and backend.
+- Add new helper actions: the driver card `onPressed` currently opens the phone dialer. To add messaging, integrate a chat module and change the button to open the chat screen instead.
+
+Final notes and gotchas
+-----------------------
+- Avoid ambiguous imports between Rive and Flutter by hiding conflicting exports or prefixing the Rive imports.
+- Ensure long-running async operations check `mounted` before calling `Navigator.of(context)` or updating state.
+- Address analyzer infos before production (withOpacity deprecations, `value`→`initialValue` for form fields, etc.).
+
+If you want, I can generate a 1-page speaker note extracted from this file, convert this to PDF, or make a developer README describing how to replace demo services with real endpoints.
